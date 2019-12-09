@@ -13,6 +13,7 @@ struct Opt {
 const CARGO_LOCK: &str = "Cargo.lock";
 
 type Package<'a> = (&'a str, &'a str);
+type PackageSet<'a> = Vec<Package<'a>>;
 
 fn main() -> Result<(), String> {
 	let opt = Opt::from_args();
@@ -32,6 +33,7 @@ fn main() -> Result<(), String> {
 		.ok_or_else(|| "Parsing packages failed".to_string())?;
 
 	let mut package_idx = HashMap::new();
+	let mut cycles = HashMap::new();
 
 	packages.iter().for_each(|p| {
 		if let Some(package) = p.as_table() {
@@ -56,30 +58,42 @@ fn main() -> Result<(), String> {
 			}
 		}
 	});
-	let mut found = vec![];
 	package_idx.iter().for_each(|(package, deps)| {
-		check_packages(&package_idx, deps, &mut vec![*package], &mut found);
+		check_packages(&package_idx, deps, &mut vec![*package], &mut cycles);
 	});
 
-	Ok(())
+	if cycles.is_empty() {
+		Ok(())
+	} else {
+
+		let mut keys : Vec<&Package> = cycles.keys().collect();
+		let count = keys.len();
+		keys.sort();
+		for (name, version) in keys {
+			if let Some(path) = package_idx.get(&(name, version)) {
+				let mut view = path.iter().map(|(x, y)| format!("{:}({:})", x, y)).collect::<Vec<String>>();
+				view.push(format!("{:}({:})", name, version));
+				println!("{:} ({:}): Cycle through {:}", name, version, view.join(" -> "));
+			}
+		}
+
+		Err(format!("{} cyclic dependencies found", count))
+	}
 }
 
 fn check_packages<'a>(
-	idx: &HashMap<Package<'a>, Vec<Package<'a>>>,
-	deps: &Vec<Package<'a>>,
-	mut cur_path: &mut Vec<Package<'a>>,
-	mut found: &mut Vec<Package<'a>>,
+	idx: &HashMap<Package<'a>, PackageSet<'a>>,
+	deps: &PackageSet<'a>,
+	mut cur_path: &mut PackageSet<'a>,
+	mut found: &mut HashMap<Package<'a>, PackageSet<'a>>,
 ) {
 	deps.iter().for_each( |cur| {
-		if found.contains(cur) {
+		if found.contains_key(cur) {
 			// skip already known cycles
 			return
 		}
 		if let Some(pos) = cur_path.iter().position(|x| x == cur) {
-			let mut path = cur_path.split_at(pos).1.iter().map(|(x, y)| format!("{:}({:})", x, y)).collect::<Vec<String>>();
-			path.push(format!("{:}({:})", cur.0, cur.1));
-			println!("{:} ({:}): Cycle through {:}", cur.0, cur.1, path.join(" -> "));
-			found.push(*cur);
+			found.insert(*cur, cur_path.split_at(pos).1.to_vec());
 			return
 		} else {
 			cur_path.push(*cur);
