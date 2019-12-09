@@ -12,9 +12,10 @@ struct Opt {
 
 const CARGO_LOCK: &str = "Cargo.lock";
 
+type Package<'a> = (&'a str, &'a str);
+
 fn main() -> Result<(), String> {
 	let opt = Opt::from_args();
-	eprintln!("Working on: {:?}", opt.lock_dir);
 	let lock_path = if opt.lock_dir.ends_with(CARGO_LOCK) {
 		opt.lock_dir.clone()
 	} else {
@@ -52,19 +53,44 @@ fn main() -> Result<(), String> {
 					})
 					.collect::<Vec<(&str, &str)>>()
 				);
-
-				eprintln!("Added {:?} ({:?})", name, version);
-
 			}
 		}
-
 	});
+	let mut found = vec![];
+	package_idx.iter().for_each(|(package, deps)| {
+		check_packages(&package_idx, deps, &mut vec![*package], &mut found);
+	});
+
 	Ok(())
+}
+
+fn check_packages<'a>(
+	idx: &HashMap<Package<'a>, Vec<Package<'a>>>,
+	deps: &Vec<Package<'a>>,
+	mut cur_path: &mut Vec<Package<'a>>,
+	mut found: &mut Vec<Package<'a>>,
+) {
+	deps.iter().for_each( |cur| {
+		if found.contains(cur) {
+			// skip already known cycles
+			return
+		}
+		if let Some(pos) = cur_path.iter().position(|x| x == cur) {
+			let mut path = cur_path.split_at(pos).1.iter().map(|(x, y)| format!("{:}({:})", x, y)).collect::<Vec<String>>();
+			path.push(format!("{:}({:})", cur.0, cur.1));
+			println!("{:} ({:}): Cycle through {:}", cur.0, cur.1, path.join(" -> "));
+			found.push(*cur);
+			return
+		} else {
+			cur_path.push(*cur);
+			idx.get(cur).map(|inner| check_packages(idx, inner, &mut cur_path, &mut found));
+			let _ = cur_path.pop();
+		}
+	});
 }
 
 fn read_and_parse_toml(cargo_path: &Path) -> io::Result<toml::Value> {
 	use std::io::Read;
-	eprintln!("Reading Cargo.toml: {:?}", cargo_path);
 	let mut file = fs::File::open(cargo_path)?;
 	let mut contents = String::new();
 	file.read_to_string(&mut contents)?;
