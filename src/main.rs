@@ -8,6 +8,10 @@ use std::collections::HashMap;
 struct Opt {
 	#[structopt(parse(from_os_str))]
 	lock_dir: PathBuf,
+	#[structopt(long, short)]
+	/// Display result in github flawored markdown
+	github: bool
+
 }
 
 const CARGO_LOCK: &str = "Cargo.lock";
@@ -33,7 +37,7 @@ fn main() -> Result<(), String> {
 		.ok_or_else(|| "Parsing packages failed".to_string())?;
 
 	let mut package_idx = HashMap::new();
-	let mut cycles = HashMap::new();
+	let mut checked = HashMap::new();
 
 	packages.iter().for_each(|p| {
 		if let Some(package) = p.as_table() {
@@ -59,20 +63,22 @@ fn main() -> Result<(), String> {
 		}
 	});
 	package_idx.iter().for_each(|(package, deps)| {
-		check_packages(&package_idx, deps, &mut vec![*package], &mut cycles);
+		check_packages(&package_idx, deps, &mut vec![*package], &mut checked);
 	});
 
-	if cycles.is_empty() {
+	let mut cyclic : Vec<(&Package, &PackageSet)> = checked.iter().filter(|(_k, v)| v.len() > 0).collect();
+
+	if cyclic.is_empty() {
 		Ok(())
 	} else {
-
-		let mut keys : Vec<&Package> = cycles.keys().collect();
-		let count = keys.len();
-		keys.sort();
-		for (name, version) in keys {
-			if let Some(path) = package_idx.get(&(name, version)) {
-				let mut view = path.iter().map(|(x, y)| format!("{:}({:})", x, y)).collect::<Vec<String>>();
-				view.push(format!("{:}({:})", name, version));
+		let count = cyclic.len();
+		cyclic.sort();
+		for ((name, version), path) in cyclic {
+			let mut view = path.iter().map(|(x, y)| format!("`{:}`(`{:}`)", x, y)).collect::<Vec<String>>();
+			view.push(format!("`{:}`(`{:}`)", name, version));
+			if opt.github {
+				println!("- [ ] `{:}` (`{:}`): Cycle through {:}", name, version, view.join(" -> "));
+			} else {
 				println!("{:} ({:}): Cycle through {:}", name, version, view.join(" -> "));
 			}
 		}
@@ -95,11 +101,12 @@ fn check_packages<'a>(
 		if let Some(pos) = cur_path.iter().position(|x| x == cur) {
 			found.insert(*cur, cur_path.split_at(pos).1.to_vec());
 			return
-		} else {
-			cur_path.push(*cur);
-			idx.get(cur).map(|inner| check_packages(idx, inner, &mut cur_path, &mut found));
-			let _ = cur_path.pop();
 		}
+
+		cur_path.push(*cur);
+		idx.get(cur).map(|inner| check_packages(idx, inner, &mut cur_path, &mut found));
+		cur_path.pop();
+		found.entry(*cur).or_insert(vec![]);
 	});
 }
 
